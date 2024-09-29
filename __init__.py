@@ -1,6 +1,6 @@
 bl_info = {
     "name": "IGI2 model format",
-    "author": "Neonix Modding Team",
+    "author": "Rotari Artiom",
     "version": (0, 1, 1),
     "blender": (4, 2, 1),
     "location": "File > Import > Mef Model (.mef) ",
