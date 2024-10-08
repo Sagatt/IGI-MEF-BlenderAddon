@@ -11,8 +11,14 @@ bl_info = {
 import bpy
 from bpy.props import StringProperty, BoolProperty
 from bpy_extras.io_utils import ImportHelper
+import os
+import sys
 
-from io_mesh_igi2 import import_mef
+# Add the current directory to sys.path
+addon_dir = os.path.dirname(__file__)
+sys.path.append(addon_dir)
+
+import import_mef
 
 # Reload support for development
 if "bpy" in locals():
