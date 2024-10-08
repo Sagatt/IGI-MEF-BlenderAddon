@@ -353,11 +353,7 @@ def parse_cftp(cftp_bytes):
     return np.frombuffer(cftp_bytes, DTYPE_CFTP)
 
 def parse_ecaf(ecaf_bytes):
-    ecaf_data = np.frombuffer(ecaf_bytes, DTYPE_ECAF)
-    
-    faces = [(face['a'], face['b'], face['c']) for face in ecaf_data]
-    
-    return faces
+    return np.frombuffer(ecaf_bytes, DTYPE_ECAF)
 
 def parse_d3dr(d3dr_bytes, model_type):
     if model_type == 0:

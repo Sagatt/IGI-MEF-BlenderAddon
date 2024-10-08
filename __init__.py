@@ -1,8 +1,8 @@
 bl_info = {
     "name": "IGI2 model format",
-    "author": "Neonix IGI2 Team",
-    "version": (1, 0, 0),
-    "blender": (4, 2, 2),
+    "author": "Rotari Artiom",
+    "version": (0, 1, 1),
+    "blender": (4, 2, 1),
     "location": "File > Import > Mef Model (.mef) ",
     "description": "Import IGI2 Mef models",
     "category": "Import-Export",
