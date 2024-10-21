@@ -3,165 +3,158 @@ import numpy as np
 import os
 import sys
 
-# Add the current directory to sys.path
 addon_dir = os.path.dirname(__file__)
 sys.path.append(addon_dir)
 
 import reader_ilff as reader_ilff
 from struct_mef import *
 
-def find_textures_for_model(model_name):
-    # Get the path to the Blender's addon directory
-    blender_version = "4.2"
-    appdata_path = os.getenv('APPDATA')
-    addon_directory = os.path.join(appdata_path, "Blender Foundation", "Blender", blender_version, "scripts", "addons", "io_mesh_igi2")
-    file_path = os.path.join(addon_directory, "common.dat")
+class Rigid:
+    def __init__(self, reader, objectname):
+        self.reader = reader
+        self.objectname = objectname
+        self.hsem = None
+        self.ecaf = None
+        self.d3dr = None
+        self.dner = None
+        self.xtrv = None
+        self.xtvc = None
+        self.ecfc = None
+        self.xtvm = None
+        self.objects = []
 
-    # Initialize variables
-    textures = []
+    def load_bytes(self):
+        """Reads the necessary bytes for the mesh sections."""
+        self.hsem_bytes = self.reader.read(b'HSEM')
+        self.d3dr_bytes = self.reader.read(b'D3DR')
+        self.dner_bytes = self.reader.read(b'DNER')
+        self.ecaf_bytes = self.reader.read(b'ECAF')
+        self.xtrv_bytes = self.reader.read(b'XTRV')
+        self.xtvc_bytes = self.reader.read(b'XTVC')
+        self.ecfc_bytes = self.reader.read(b'ECFC')
+        self.xtvm_bytes = self.reader.read(b'XTVM')
 
-    # Open the file and read its content
-    try:
-        with open(file_path, 'r') as file:
-            lines = file.readlines()
-            for i, line in enumerate(lines):
-                line = line.strip()  # Remove leading/trailing whitespace
-                if line == model_name:  # Check for the model name
-                    # Read the amount of textures
-                    amount_of_textures = int(lines[i + 1].strip())
-                    # Read texture names
-                    for j in range(amount_of_textures):
-                        texture_name = lines[i + 2 + j].strip()
-                        textures.append(texture_name)
-                    break  # Exit the loop once the model is found
-    except FileNotFoundError:
-        print(f"Error: common.dat was not found in '{addon_directory}'.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+        if not all((self.hsem_bytes, self.d3dr_bytes, self.dner_bytes, self.ecaf_bytes, self.xtrv_bytes, self.xtvc_bytes, self.ecfc_bytes, self.xtvm_bytes)):
+            raise ValueError("One or more required sections are missing from the file.")
 
-    return textures
+    def parse_bytes(self):
+        """Parses the bytes into NumPy arrays."""
+        self.hsem = np.frombuffer(self.hsem_bytes, DTYPE_HSEM)
+        self.ecaf = np.frombuffer(self.ecaf_bytes, DTYPE_ECAF)
+        self.ecfc = np.frombuffer(self.ecfc_bytes, DTYPE_ECFC)
+        self.xtvm = np.frombuffer(self.xtvm_bytes, DTYPE_XTVM)
 
-def assign_textures_to_objects(object_list, textures):
-    blender_version = "4.2"
-    appdata_path = os.getenv('APPDATA')
-    addon_directory = os.path.join(appdata_path, "Blender Foundation", "Blender", blender_version, "scripts", "addons", "io_mesh_igi2")
-    textures_directory = os.path.join(addon_directory, "textures")
-    
-    # Supported texture formats
-    supported_extensions = ['.tga', '.png', '.jpg', '.jpeg']
-    
-    # Loop over objects and textures and assign accordingly
-    for obj_index, obj in enumerate(object_list):
-        if obj_index < len(textures):
-            texture_name = textures[obj_index]
-            texture_path = None
+        model_type = self.hsem['model_type'][0]
+        if model_type == 0:
+            self.d3dr = np.frombuffer(self.d3dr_bytes, DTYPE_D3DR_0)
+            self.dner = np.frombuffer(self.dner_bytes, DTYPE_DNER_0)
+            self.xtrv = np.frombuffer(self.xtrv_bytes, DTYPE_XTRV_0)
+            self.xtvc = np.frombuffer(self.xtvc_bytes, DTYPE_XTVC_0)
+        elif model_type == 1:
+            self.d3dr = np.frombuffer(self.d3dr_bytes, DTYPE_D3DR_1)
+            self.dner = np.frombuffer(self.dner_bytes, DTYPE_DNER_1)
+            self.xtrv = np.frombuffer(self.xtrv_bytes, DTYPE_XTRV_1)
+            self.xtvc = np.frombuffer(self.xtvc_bytes, DTYPE_XTVC_1)
+        elif model_type == 3:
+            self.d3dr = np.frombuffer(self.d3dr_bytes, DTYPE_D3DR_3)
+            self.dner = np.frombuffer(self.dner_bytes, DTYPE_DNER_3)
+            self.xtrv = np.frombuffer(self.xtrv_bytes, DTYPE_XTRV_3)
+            self.xtvc = np.frombuffer(self.xtvc_bytes, DTYPE_XTVC_3)
 
-            # Check if texture exists with any supported extension
-            for ext in supported_extensions:
-                potential_texture_path = os.path.join(textures_directory, texture_name + ext)
-                if os.path.exists(potential_texture_path):
-                    texture_path = potential_texture_path
-                    break
-            
-            if texture_path:
-                # Create a new material
-                material = bpy.data.materials.new(name=texture_name)
-                material.use_nodes = True
+    def create_render(self):
+        """Creates Render objects from the parsed data."""
+        vertex_positions = self.xtrv[['px', 'py', 'pz']].tolist()
+        vertex_normals = self.xtrv[['nx', 'ny', 'nz']].tolist()
+        triangle_indices = self.ecaf[['c', 'b', 'a']]
+        faces_per_object = self.dner['num_face'].tolist()
 
-                # Assign the texture to the material's shader node
-                bsdf = material.node_tree.nodes.get("Principled BSDF")
-                tex_image = material.node_tree.nodes.new('ShaderNodeTexImage')
-                tex_image.image = bpy.data.images.load(texture_path)  # Load the texture
+        face_start = 0
 
-                # Link texture to the shader
-                material.node_tree.links.new(bsdf.inputs['Base Color'], tex_image.outputs['Color'])
+        for object_index, num_faces in enumerate(faces_per_object):
+            face_end = face_start + num_faces
+            object_triangle_indices = triangle_indices[face_start:face_end].tolist()
 
-                # Assign material to the object
-                obj.data.materials.append(material)
+            object_name = f"{self.objectname}_{object_index}"
+            mesh = bpy.data.meshes.new(object_name)
+
+            if not isinstance(object_triangle_indices[0], (list, tuple)):
+                raise ValueError("Triangle indices are not in the correct format.")
+
+            mesh.from_pydata(vertex_positions, [], object_triangle_indices)
+
+            if len(vertex_normals) == len(mesh.vertices):
+                mesh.normals_split_custom_set_from_vertices(vertex_normals)
             else:
-                print(f"Image {texture_name} not found in {textures_directory}.")
-        else:
-            print(f"No texture available for object {obj.name}.")
+                raise RuntimeError("Number of vertex normals does not match the number of vertices.")
 
-def load_render_mesh(reader, objectname):
-    hsem_bytes = reader.read(b'HSEM')
-    d3dr_bytes = reader.read(b'D3DR')
-    dner_bytes = reader.read(b'DNER')
-    ecaf_bytes = reader.read(b'ECAF')
-    xtrv_bytes = reader.read(b'XTRV')
+            self.apply_uv_maps(mesh)
 
-    # Ensure all required sections are present
-    if not all((hsem_bytes, d3dr_bytes, dner_bytes, ecaf_bytes, xtrv_bytes)):
-        raise ValueError("One or more required sections are missing from the file.")
+            mesh.update()
+            mesh.validate()
 
-    hsem = np.frombuffer(hsem_bytes, DTYPE_HSEM)
-    ecaf = np.frombuffer(ecaf_bytes, DTYPE_ECAF)
+            mesh_object = bpy.data.objects.new(object_name, mesh)
+            bpy.context.collection.objects.link(mesh_object)     
 
-    if hsem['model_type'] == 0:
-        d3dr = np.frombuffer(d3dr_bytes, DTYPE_D3DR_0)
-        dner = np.frombuffer(dner_bytes, DTYPE_DNER_0)
-        xtrv = np.frombuffer(xtrv_bytes, DTYPE_XTRV_0)
+            self.objects.append(mesh_object)
 
-    elif hsem['model_type'] == 1:
-        d3dr = np.frombuffer(d3dr_bytes, DTYPE_D3DR_1)
-        dner = np.frombuffer(dner_bytes, DTYPE_DNER_1)
-        xtrv = np.frombuffer(xtrv_bytes, DTYPE_XTRV_1)
+            face_start = face_end
+            
+            mesh_object.scale = (0.0005, 0.0005, 0.0005)
+                    
+    def create_collision(self):
+        """Creates Collision mesh object from the parsed data."""
+        vertex_positions = self.xtvc[['px', 'py', 'pz']].tolist()
+        triangle_indices = self.ecfc[['c', 'b', 'a']].tolist()
 
-    elif hsem['model_type'] == 3:
-        d3dr = np.frombuffer(d3dr_bytes, DTYPE_D3DR_3)
-        dner = np.frombuffer(dner_bytes, DTYPE_DNER_3)
-        xtrv = np.frombuffer(xtrv_bytes, DTYPE_XTRV_3)
+        mesh = bpy.data.meshes.new("collision_mesh")
 
-    vertex_positions = xtrv[['px', 'py', 'pz']].tolist()  # Ensure this is a list of tuples/lists
-    vertex_normals = xtrv[['nx', 'ny', 'nz']].tolist()    # Ensure this is a list of tuples/lists
-    triangle_indices = ecaf[['c', 'b', 'a']]
+        mesh.from_pydata(vertex_positions, [], triangle_indices)
 
-    faces_per_object = list()
+        mesh.update()
+        mesh.validate()
 
-    # Store the number of faces per object from the dner data
-    for i in dner['num_face']:
-        faces_per_object.append(i)
-    
-    # Loop over the face ranges to create separate objects
-    face_start = 0
-    objects = []
-    
-    for obj_index, num_faces in enumerate(faces_per_object):
-        face_end = face_start + num_faces
-
-        # Create the mesh for this object
-        object_name = f"{objectname}_{obj_index}"
-        mesh = bpy.data.meshes.new(object_name)
-
-        # Use only the face range for this object
-        object_triangle_indices = triangle_indices[face_start:face_end].tolist()  # Convert to list of tuples
-
-        # Ensure that object_triangle_indices is a list of tuples
-        if not isinstance(object_triangle_indices[0], (list, tuple)):
-            raise ValueError("Triangle indices are not in the correct format.")
+        mesh_object = bpy.data.objects.new(f"{self.objectname}_collision", mesh)
+        bpy.context.collection.objects.link(mesh_object)
         
-        # Create the mesh data for this object
-        mesh.from_pydata(vertex_positions, [], object_triangle_indices)
+        bpy.ops.object.select_all(action='DESELECT')
+        
+        mesh_object.select_set(True)
+        bpy.context.view_layer.objects.active = mesh_object
+        
+        mesh_object.scale = (0.0005, 0.0005, 0.0005)
+     
+    def create_magic(self):
+        """Creates Magic verts."""
+        vertex_positions = self.xtvm[['px', 'py', 'pz']].tolist()
 
-        # Apply the custom vertex normals
-        if len(vertex_normals) == len(mesh.vertices):
-            mesh.normals_split_custom_set_from_vertices(vertex_normals)
-        else:
-            raise RuntimeError("Number of vertex normals does not match the number of vertices.")
+        mesh = bpy.data.meshes.new("magic_mesh")
+        
+        mesh.from_pydata(vertex_positions, [], [])
+        
+        mesh.update()
+        mesh.validate()
 
-        # Extract UV coordinates (primary: u, v) and (secondary: u1, v1)
-        primary_uv_coordinates = xtrv[['u', 'v']].tolist()
+        mesh_object = bpy.data.objects.new(f"{self.objectname}_magic", mesh)
+        bpy.context.collection.objects.link(mesh_object)
+
+        bpy.ops.object.select_all(action='DESELECT')
+
+        mesh_object.select_set(True)
+        bpy.context.view_layer.objects.active = mesh_object
+        
+        mesh_object.scale = (0.0005, 0.0005, 0.0005)  
+            
+
+    def apply_uv_maps(self, mesh):
+        """Applies UV maps to the mesh."""
+        primary_uv_coordinates = self.xtrv[['u', 'v']].tolist()
         secondary_uv_coordinates = []
-        if 'u1' in xtrv.dtype.names and 'v1' in xtrv.dtype.names:
-            secondary_uv_coordinates = xtrv[['u1', 'v1']].tolist()
-        else:
-            print("Warning: UV coordinates 'u1' and 'v1' not found in XTRV.")
+        if 'u1' in self.xtrv.dtype.names and 'v1' in self.xtrv.dtype.names:
+            secondary_uv_coordinates = self.xtrv[['u1', 'v1']].tolist()
 
-        # Flip UV coordinates on both X and Y axes
         flipped_primary_uv_coordinates = [(1.0 - u, 1.0 - v) for u, v in primary_uv_coordinates]
         flipped_secondary_uv_coordinates = [(1.0 - u1, 1.0 - v1) for u1, v1 in secondary_uv_coordinates]
 
-        # Create the primary UV map for the mesh
         if not mesh.uv_layers:
             mesh.uv_layers.new(name="PrimaryUVMap")
 
@@ -169,111 +162,86 @@ def load_render_mesh(reader, objectname):
         for i, loop in enumerate(mesh.loops):
             primary_uv_layer[i].uv = flipped_primary_uv_coordinates[loop.vertex_index]
 
-        # Optionally, create the secondary UV map
         if len(flipped_secondary_uv_coordinates) > 0:
             secondary_uv_layer = mesh.uv_layers.new(name="SecondaryUVMap")
             for i, loop in enumerate(mesh.loops):
                 secondary_uv_layer.data[i].uv = flipped_secondary_uv_coordinates[loop.vertex_index]
 
-        # Update and validate the mesh
+    def load(self):
+        """Main method to load and create the mesh."""
+        self.load_bytes()
+        self.parse_bytes()
+        self.create_render()
+        #self.create_collision()
+        self.create_magic()
+        self.create_spheres()           
+        return self.objects
+
+class Shadow:
+    def __init__(self, reader, objectname):
+        self.reader = reader
+        self.objectname = objectname
+        self.sems = None
+        self.xtvs = None
+        self.cafs = None
+        self.egde = None
+        self.objects = []
+
+    def load_bytes(self):
+        """Reads the necessary bytes for the mesh sections."""
+        self.sems_bytes = self.reader.read(b'SEMS')
+        self.xtvs_bytes = self.reader.read(b'XTVS')
+        self.cafs_bytes = self.reader.read(b'CAFS')
+        self.egde_bytes = self.reader.read(b'EGDE')
+
+        if not all((self.sems_bytes, self.xtvs_bytes, self.cafs_bytes, self.egde_bytes)):
+            raise ValueError("One or more required sections are missing from the file.")
+
+    def parse_bytes(self):
+        """Parses the bytes into NumPy arrays."""
+        self.sems = np.frombuffer(self.sems_bytes, DTYPE_SEMS)
+        self.xtvs = np.frombuffer(self.xtvs_bytes, DTYPE_XTVS)
+        self.cafs = np.frombuffer(self.cafs_bytes, DTYPE_CAFS)
+        self.egde = np.frombuffer(self.egde_bytes, DTYPE_EGDE)
+
+    def create_shadow(self):
+        """Creates Render objects from the parsed data."""
+        positions = self.xtvs.tolist()
+        triangles_indices = self.cafs[['a', 'b', 'c']].tolist()
+        triangles_normals = self.cafs[['nz', 'ny', 'nx']].tolist()
+        edges = self.egde.tolist()
+        
+        mesh = bpy.data.meshes.new('shadow_mesh')
+        mesh.from_pydata(positions, edges, triangles_indices)
+
         mesh.update()
         mesh.validate()
 
-        # Create the object and link it to the scene collection
-        render_mesh_object = bpy.data.objects.new(object_name, mesh)
-        bpy.context.collection.objects.link(render_mesh_object)
+        mesh_object = bpy.data.objects.new(self.objectname, mesh)
+        bpy.context.collection.objects.link(mesh_object)
         
-        # Append the object to the list
-        objects.append(render_mesh_object)
+        bpy.ops.object.select_all(action='DESELECT')
+            
+        mesh_object.scale = (0.0005, 0.0005, 0.0005)
+                    
+    def load(self):
+        """Main method to load and create the mesh."""
+        self.load_bytes()
+        self.parse_bytes()
+        self.create_shadow()           
+        return self.objects
 
-        # Move the face_start index to the next face range
-        face_start = face_end
-
-    return objects  # Return a list of objects to link in load_mef
-
-
-def load_shadow_mesh(reader, objectname):
-    sems_bytes = reader.read(b'SEMS')
-    xtvs_bytes = reader.read(b'XTVS')
-    cafs_bytes = reader.read(b'CAFS')
-    egde_bytes = reader.read(b'EGDE')
-
-    sems = np.frombuffer(sems_bytes, DTYPE_SEMS)
-    xtvs = np.frombuffer(xtvs_bytes, DTYPE_XTVS)
-    cafs = np.frombuffer(cafs_bytes, DTYPE_CAFS)
-    egde = np.frombuffer(egde_bytes, DTYPE_EGDE)
-    
-    # Ensure all required sections are present
-    if not all((sems_bytes, xtvs_bytes, cafs_bytes, egde_bytes)):
-        raise ValueError("One or more required sections are missing from the file.")
-    
-    positions = xtvs.tolist()
-    triangles_indices = cafs[['a', 'b', 'c']].tolist()
-    triangles_normals = cafs[['nz', 'ny', 'nx']].tolist()
-    edges = egde.tolist()
-
-    # Create the mesh
-    mesh = bpy.data.meshes.new('shadow_mesh')
-    mesh.from_pydata(positions, edges, triangles_indices)
-
-    # Update and validate the mesh
-    mesh.update()
-    mesh.validate()
-
-    # Create the object and link it to the scene collection
-    shadow_mesh_object = bpy.data.objects.new(objectname, mesh)
-    bpy.context.collection.objects.link(shadow_mesh_object)
-
-    return shadow_mesh_object
-
-def join_objects_and_rename(objects, base_name):
-    # Select all objects
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in objects:
-        obj.select_set(True)
-
-    # Set the first object as the active one
-    bpy.context.view_layer.objects.active = objects[0]
-
-    # Join all the selected objects into one
-    bpy.ops.object.join()
-
-    # Rename the joined object by removing the _indexnumber
-    joined_object = bpy.context.view_layer.objects.active
-    joined_object.name = base_name
-
-    return joined_object
 
 def load_mef(*args, **kwargs):
-    filepath = args[0] # Define filepath of the opened file
-    name = bpy.path.display_name_from_filepath(filepath) # e.g 100_01_1.mef
-    reader = reader_ilff.open_ilff(str(filepath)) # Get the ILFF reader ready
+    name = bpy.path.display_name_from_filepath(args[0])
+    reader = reader_ilff.open_ilff(str(args[0]))
     
     if reader.find(b'HSEM'):
-        # Find textures for the model
-        textures = find_textures_for_model(name)
-
-        # Load mesh objects based on face ranges
-        objects = load_render_mesh(reader, name)
-
-        # Assign textures to the objects
-        assign_textures_to_objects(objects, textures)
-
-        # Join objects into one and rename
-        object = join_objects_and_rename(objects, name)
-
-        # Deselect all objects
-        bpy.ops.object.select_all(action='DESELECT')
-
+        rigidLoader = Rigid(reader, name)
+        rigidLoader.load()
     elif reader.find(b'SEMS'):
-        object = load_shadow_mesh(reader, name)
-
-    #Select and activate the object
-    object.select_set(True)
-    bpy.context.view_layer.objects.active = object
-    
-    # Set the scale
-    object.scale = (0.0005, 0.0005, 0.0005)
+        shadowLoader = Shadow(reader, name)
+        shadowLoader.load()
 
 def load(*args, **kwargs):
     load_mef(*args, **kwargs)
